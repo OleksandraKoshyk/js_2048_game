@@ -1,32 +1,170 @@
-/* eslint-disable no-console */
 'use strict';
 
 const Game = require('../modules/Game.class');
 const game = new Game();
 
+const rootStyles = getComputedStyle(document.documentElement);
+const cellSize = parseFloat(rootStyles.getPropertyValue('--cell-size'));
+const cellSpacing = parseFloat(rootStyles.getPropertyValue('--cell-spacing'));
+
+const gameField = document.querySelector('.game-field');
 const startBtn = document.querySelector('.start');
 const scoreDisplay = document.querySelector('.game-score');
-const fieldCells = document.querySelectorAll('.field-cell');
 const messageStart = document.querySelector('.message-start');
 const messageWin = document.querySelector('.message-win');
 const messageLose = document.querySelector('.message-lose');
 
-function renderBoard(board) {
-  console.log(board);
+const gameFieldContainer = document.createElement('section');
 
-  fieldCells.forEach((cell, index) => {
-    const row = Math.floor(index / 4);
-    const col = index % 4;
-    const value = board[row][col];
+gameFieldContainer.className = 'gameFieldContainer';
 
-    cell.textContent = value !== 0 ? value : '';
+gameField.parentNode.insertBefore(gameFieldContainer, gameField);
+gameFieldContainer.appendChild(gameField);
 
-    cell.className = 'field-cell';
+const tileContainer = document.createElement('div');
 
-    if (value !== 0) {
-      cell.classList.add(`field-cell--${value}`);
+tileContainer.classList.add('tile-container');
+gameField.parentNode.insertBefore(tileContainer, gameField.nextElementSibling);
+
+const tileElements = new Map();
+
+async function renderBoard() {
+  const currentTiles = game.getTiles();
+  const currentTileIds = new Set(currentTiles.map((tile) => tile.id));
+
+  for (const [id, element] of tileElements.entries()) {
+    if (!currentTileIds.has(id)) {
+      const transformValue = window.getComputedStyle(element).transform;
+
+      element.animate(
+        [
+          { opacity: 1, transform: `${transformValue} scale(1)` },
+          { opacity: 0, transform: `${transformValue} scale(0)` },
+        ],
+        {
+          duration: 150,
+          easing: 'linear',
+          fill: 'forwards',
+        },
+      );
+
+      element.addEventListener(
+        'animationend',
+        () => {
+          element.remove();
+          tileElements.delete(id);
+        },
+        { once: true },
+      );
     }
+  }
+
+  currentTiles.forEach((tile) => {
+    let tileElement = tileElements.get(tile.id);
+
+    if (!tileElement) {
+      tileElement = document.createElement('div');
+      tileElement.classList.add('tile');
+      tileElement.dataset.id = tile.id;
+      tileContainer.appendChild(tileElement);
+      tileElements.set(tile.id, tileElement);
+    }
+
+    tileElement.textContent = tile.value;
+    tileElement.className = 'tile';
+    tileElement.classList.add(`tile--${tile.value}`);
+
+    const fullCellSize = cellSize + cellSpacing;
+    let finalX = tile.col * fullCellSize;
+    let finalY = tile.row * fullCellSize;
+
+    let initialX = finalX;
+    let initialY = finalY;
+
+    if (
+      tile.previousPosition &&
+      (tile.previousPosition.col !== tile.col ||
+        tile.previousPosition.row !== tile.row)
+    ) {
+      initialX = tile.previousPosition.col * fullCellSize;
+      initialY = tile.previousPosition.row * fullCellSize;
+      tile.previousPosition = null;
+
+      tileElement.animate(
+        [
+          {
+            transform: `translate(${initialX}px, ${initialY}px)`,
+            offset: 0,
+          },
+          {
+            transform: `translate(${finalX}px, ${finalY}px)`,
+            offset: 1,
+          },
+        ],
+        {
+          duration: 250,
+          easing: 'ease-in',
+          fill: 'forwards',
+        },
+      );
+    } else if (tile.mergedFrom) {
+      const parentTileForOrigin = tile.mergedFrom[1];
+
+      initialX = parentTileForOrigin.col * fullCellSize;
+      initialY = parentTileForOrigin.row * fullCellSize;
+
+      tileElement.animate(
+        [
+          {
+            transform: `translate(${initialX}px, ${initialY}px) scale(1.2)`,
+          },
+          {
+            transform: `translate(${finalX}px, ${finalY}px) scale(1)`,
+          },
+        ],
+        {
+          duration: 200,
+          easing: 'linear',
+          fill: 'forwards',
+        },
+      );
+
+      tile.mergedFrom = null;
+    }
+
+    if (tile.isNew && !tile.mergedFrom) {
+      tileElement.animate(
+        [
+          {
+            transform: `translate(${finalX}px, ${finalY}px) scale(0)`,
+            opacity: '0',
+          },
+          {
+            transform: `translate(${finalX}px, ${finalY}px) scale(1.4)`,
+            opacity: 0,
+          },
+          {
+            transform: `translate(${finalX}px, ${finalY}px) scale(1)`,
+            opacity: 1,
+          },
+        ],
+        {
+          duration: 250,
+          easing: 'ease-out',
+          fill: 'forwards',
+        },
+      );
+    }
+
+    finalX = initialX;
+    finalY = initialY;
   });
+
+  scoreDisplay.textContent = game.getScore();
+
+  showMessage(messageWin, 'win');
+  showMessage(messageLose, 'lose');
+  showMessage(messageStart, 'idle');
 }
 
 function showMessage(element, type) {
@@ -37,18 +175,7 @@ function showMessage(element, type) {
   }
 }
 
-function upDateUI() {
-  renderBoard(game.getState());
-  scoreDisplay.textContent = game.getScore();
-
-  showMessage(messageWin, 'win');
-  showMessage(messageLose, 'lose');
-  showMessage(messageStart, 'idle');
-}
-
 startBtn.addEventListener('click', () => {
-  console.log(game.getStatus());
-
   if (game.getStatus() === 'idle') {
     game.start();
     startBtn.textContent = 'Restart';
@@ -58,15 +185,10 @@ startBtn.addEventListener('click', () => {
     game.restart();
   }
 
-  console.log(game.getStatus());
-
-  upDateUI();
+  renderBoard();
 });
 
 document.addEventListener('keydown', (ev) => {
-  console.log(game.getStatus(), ev.key);
-  console.log(game.board);
-
   if (game.getStatus() !== 'playing') {
     return;
   }
@@ -75,10 +197,7 @@ document.addEventListener('keydown', (ev) => {
 
   switch (ev.key) {
     case 'ArrowUp':
-      console.log('in case Up');
-
       game.moveUp();
-      console.log(game.getState());
       moved = true;
       break;
     case 'ArrowDown':
@@ -98,8 +217,8 @@ document.addEventListener('keydown', (ev) => {
   }
 
   if (moved) {
-    upDateUI();
+    renderBoard();
   }
 });
 
-// Write your code here
+renderBoard();

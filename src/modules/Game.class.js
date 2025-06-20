@@ -24,11 +24,24 @@ class Game {
    */
   constructor(initialState) {
     this.boardSize = 4;
-    this.board = initialState || this.#createEmptyBoard();
+
+    this.board = initialState
+      ? this.#createBoardFromState(initialState)
+      : this.#createEmptyBoardWithTiles();
     this.score = 0;
     this.status = 'idle';
     this.winNumber = 2048;
     this.tiles = [];
+
+    if (initialState) {
+      for (let row = 0; row < this.boardSize; row++) {
+        for (let col = 0; col < this.boardSize; col++) {
+          if (this.board[row][col] instanceof Tile) {
+            this.tiles.push(this.board[row][col]);
+          }
+        }
+      }
+    }
   }
 
   moveLeft() {
@@ -56,7 +69,7 @@ class Game {
    * @returns {number[][]}
    */
   getState() {
-    return this.board.map((row) => [...row]);
+    return this.board.map((row) => row.map((tile) => (tile ? tile.value : 0)));
   }
 
   /**
@@ -78,8 +91,9 @@ class Game {
    */
   start() {
     this.status = 'playing';
-    this.board = this.#createEmptyBoard();
     this.score = 0;
+    this.board = this.#createEmptyBoardWithTiles();
+    this.tiles = [];
     this.#addRandomTile();
     this.#addRandomTile();
   }
@@ -92,10 +106,30 @@ class Game {
     this.start();
   }
 
-  #createEmptyBoard() {
+  getTiles() {
+    return [...this.tiles];
+  }
+
+  #createEmptyBoardWithTiles() {
     return Array.from({ length: this.boardSize }, () => {
-      return Array(this.boardSize).fill(0);
+      return Array(this.boardSize).fill(null);
     });
+  }
+
+  #createBoardFromState(initialState) {
+    const boardWithTiles = this.#createEmptyBoardWithTiles();
+
+    for (let row = 0; row < this.boardSize; row++) {
+      for (let col = 0; col < this.boardSize; col++) {
+        if (initialState[row][col] !== 0) {
+          const tile = new Tile(initialState[row][col], row, col);
+
+          boardWithTiles[row][col] = tile;
+        }
+      }
+    }
+
+    return boardWithTiles;
   }
 
   #getEmptyCells() {
@@ -103,7 +137,7 @@ class Game {
 
     for (let row = 0; row < this.boardSize; row++) {
       for (let col = 0; col < this.boardSize; col++) {
-        if (this.board[row][col] === 0) {
+        if (this.board[row][col] === null) {
           emptyCells.push({ row, col });
         }
       }
@@ -125,34 +159,55 @@ class Game {
 
     const newTile = new Tile(newValue, row, col);
 
+    this.board[row][col] = newTile;
     this.tiles.push(newTile);
-    this.board[row][col] = newValue;
   }
 
   #slideAndMergeLine(line) {
     let changed = false;
     let mergerScore = 0;
-    let newLine = line.filter((val) => val !== 0);
+    const newTilesInLine = [];
+    const mergedTilesIds = new Set();
 
-    for (let i = 0; i < newLine.length - 1; i++) {
-      if (newLine[i] === newLine[i + 1]) {
-        newLine[i] *= 2;
-        newLine[i + 1] = 0;
-        mergerScore += newLine[i];
+    const activeTiles = line.filter((tile) => tile !== null);
+
+    for (let i = 0; i < activeTiles.length; i++) {
+      const currentTile = activeTiles[i];
+      let foundMerge = false;
+
+      if (
+        i + 1 < activeTiles.length &&
+        activeTiles[i + 1].value === currentTile.value &&
+        !mergedTilesIds.has(currentTile.id) &&
+        !mergedTilesIds.has(activeTiles[i + 1])
+      ) {
+        const mergedValue = currentTile.value * 2;
+
+        mergerScore += mergedValue;
         changed = true;
+
+        const newTile = new Tile(mergedValue, currentTile.row, currentTile.col);
+
+        newTile.mergedFrom = [currentTile, activeTiles[i + 1]];
+
+        newTilesInLine.push(newTile);
+        mergedTilesIds.add(currentTile.id);
+        mergedTilesIds.add(activeTiles[i + 1].id);
+
+        i++;
+        foundMerge = true;
+      }
+
+      if (!foundMerge && !mergedTilesIds.has(currentTile.id)) {
+        newTilesInLine.push(currentTile);
       }
     }
-    newLine = newLine.filter((val) => val !== 0);
 
-    while (newLine.length < this.boardSize) {
-      newLine.push(0);
+    while (newTilesInLine.length < this.boardSize) {
+      newTilesInLine.push(null);
     }
 
-    if (newLine.join('') !== line.join('')) {
-      changed = true;
-    }
-
-    return { newLine, mergerScore, changed };
+    return { newLine: newTilesInLine, mergerScore, changed };
   }
 
   #move(direction) {
@@ -164,48 +219,98 @@ class Game {
 
     let boardChanged = false;
     let currentMoveScore = 0;
+    const oldBoard = this.#createEmptyBoardWithTiles();
+
+    this.tiles.forEach((tile) => {
+      oldBoard[tile.row][tile.col] = tile;
+    });
+
+    const newBoard = this.#createEmptyBoardWithTiles();
+    const tilesToRemove = new Set();
 
     if (direction === 'left' || direction === 'right') {
       for (let row = 0; row < this.boardSize; row++) {
-        const originalRow = [...this.board[row]];
-        const modifiedRow =
-          direction === 'right' ? originalRow.reverse() : originalRow;
-        const { newLine, mergerScore, changed } =
-          this.#slideAndMergeLine(modifiedRow);
+        const originalLine = [...this.board[row]];
+        const processedLine =
+          direction === 'right' ? originalLine.reverse() : originalLine;
+        const { newLine, mergerScore } = this.#slideAndMergeLine(processedLine);
 
-        this.board[row] = direction === 'right' ? newLine.reverse() : newLine;
         currentMoveScore += mergerScore;
 
-        if (changed) {
-          boardChanged = true;
-          this.tiles.forEach((tile) => tile.savePosition());
-        }
+        const finalLine =
+          direction === 'right' ? [...newLine].reverse() : newLine;
+
+        finalLine.forEach((tile, col) => {
+          if (tile) {
+            tile.updatePosition(row, col);
+            newBoard[row][col] = tile;
+
+            if (tile.mergedFrom) {
+              tile.mergedFrom.forEach((mergedTile) => {
+                return tilesToRemove.add(mergedTile.id);
+              });
+            }
+          }
+        });
       }
     } else {
       for (let col = 0; col < this.boardSize; col++) {
-        const originalCol = this.board.map((row) => row[col]);
-        const modifiedCol =
-          direction === 'down' ? [...originalCol].reverse() : originalCol;
-        const { newLine, mergerScore, changed } =
-          this.#slideAndMergeLine(modifiedCol);
-
-        const finalCol = direction === 'down' ? newLine.reverse() : newLine;
+        const originalLine = [];
 
         for (let row = 0; row < this.boardSize; row++) {
-          this.board[row][col] = finalCol[row];
+          originalLine.push(this.board[row][col]);
         }
+
+        const processedLine =
+          direction === 'down' ? [...originalLine].reverse() : originalLine;
+
+        const { newLine, mergerScore } = this.#slideAndMergeLine(processedLine);
 
         currentMoveScore += mergerScore;
 
-        if (changed) {
+        const finalLine =
+          direction === 'down' ? [...newLine].reverse() : newLine;
+
+        finalLine.forEach((tile, row) => {
+          if (tile) {
+            tile.updatePosition(row, col);
+            newBoard[row][col] = tile;
+
+            if (tile.mergedFrom) {
+              tile.mergedFrom.forEach((mergedTile) => {
+                return tilesToRemove.add(mergedTile.id);
+              });
+            }
+          }
+        });
+      }
+    }
+
+    for (let row = 0; row < this.boardSize; row++) {
+      for (let col = 0; col < this.boardSize; col++) {
+        const oldTile = oldBoard[row][col];
+        const newTile = newBoard[row][col];
+
+        if (oldTile !== newTile) {
           boardChanged = true;
+          break;
         }
       }
     }
-    this.#finalizeMove(boardChanged, currentMoveScore);
-  }
+    this.board = newBoard;
+    this.tiles = this.tiles.filter((tile) => !tilesToRemove.has(tile.id));
 
-  #finalizeMove(boardChanged, currentMoveScore) {
+    const uniqueTilesInNewBoard = new Set();
+
+    for (let row = 0; row < this.boardSize; row++) {
+      for (let col = 0; col < this.boardSize; col++) {
+        if (this.board[row][col]) {
+          uniqueTilesInNewBoard.add(this.board[row][col]);
+        }
+      }
+    }
+    this.tiles = Array.from(uniqueTilesInNewBoard);
+
     if (boardChanged) {
       this.score += currentMoveScore;
       this.#addRandomTile();
@@ -232,11 +337,19 @@ class Game {
       return false;
     }
 
-    const tempBoard = this.getState();
+    const tempBoardForCheck = this.#createEmptyBoardWithTiles();
+
+    this.tiles.forEach((tile) => {
+      tempBoardForCheck[tile.row][tile.col] = new Tile(
+        tile.value,
+        tile.row,
+        tile.col,
+      );
+    });
 
     for (let row = 0; row < this.boardSize; row++) {
-      const originalRow = [...tempBoard[row]];
-      const { changed } = this.#slideAndMergeLine(originalRow);
+      const originalLine = tempBoardForCheck[row].slice();
+      const { changed } = this.#slideAndMergeLine(originalLine);
 
       if (changed) {
         return false;
@@ -247,7 +360,7 @@ class Game {
       const originalCol = [];
 
       for (let row = 0; row < this.boardSize; row++) {
-        originalCol.push(tempBoard[row][col]);
+        originalCol.push(tempBoardForCheck[row][col]);
       }
 
       const { changed } = this.#slideAndMergeLine(originalCol);
